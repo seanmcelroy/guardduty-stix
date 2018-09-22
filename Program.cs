@@ -48,7 +48,7 @@ namespace guardduty_stix
             @"      / ___/_  __/  _/ |/ /   |__ \  / __ \ /____/   ",
             @"      \__ \ / /  / / |   /    __/ / / / / /          ",
             @"     ___/ // / _/ / /   |    / __/_/ /_/ /           ",
-            @"    /____//_/ /___//_/|_|   /____(_)____/            ",
+            @"    /____//_/ /___//_/|_|   /____(_)____/  ver 1.0.1 ",
             @"",
             @"A program to turn GuardDuty findings from the AWS API",
             @"   into compliant STIX 2.0                           ",
