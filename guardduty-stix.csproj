@@ -3,7 +3,17 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>netcoreapp2.1</TargetFramework>
+    <RuntimeIdentifiers>win-x64;osx-x64;linux-x64</RuntimeIdentifiers>
     <RootNamespace>guardduty_stix</RootNamespace>
+    <PackageId>com.seanmcelroy.guardduty_stix</PackageId>
+    <Title>guardduty-stix</Title>
+    <Description>A program to turn GuardDuty findings from the AWS API into compliant STIX 2.0</Description>
+    <Version>1.0.0</Version>
+    <Authors>Sean McElroy</Authors>
+    <Copyright>Copyright 2018 Sean McElroy</Copyright>
+    <PackageLicenseUrl>https://github.com/seanmcelroy/guardduty-stix/blob/master/LICENSE</PackageLicenseUrl>
+    <PackageProjectUrl>https://github.com/seanmcelroy/guardduty-stix</PackageProjectUrl>
+    <PackageTags>stix;guardduty</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
