@@ -54,5 +54,10 @@ tar -cvzf ./guardduty-stix-linux-x64-${VERSION}.tgz ./linux-x64-temp/
 # Clean up
 rm -rf linux-x64-temp
 
+## DETACHED SIGS
+gpg --output guardduty-stix-osx-x64-${VERSION}.tgz.sig --detach-sig guardduty-stix-osx-x64-${VERSION}.tgz 
+gpg --output guardduty-stix-win-x64-${VERSION}.tgz.sig --detach-sig guardduty-stix-win-x64-${VERSION}.tgz
+gpg --output guardduty-stix-linux-x64-${VERSION}.tgz.sig --detach-sig guardduty-stix-linux-x64-${VERSION}.tgz
+
 ## CLEANUP
 rm -f ./guardduty-stix.csproj.bak
