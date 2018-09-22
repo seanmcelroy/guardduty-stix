@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -18,6 +19,8 @@ namespace guardduty_stix
 {
     class Program
     {
+        private static readonly SHA256Managed sha256managed = new SHA256Managed();
+
         public class Options
         {
             [Option('p', "profile", Required = false, HelpText = "Connect to the AWS account with the credential stored in a named profile")]
@@ -31,6 +34,9 @@ namespace guardduty_stix
 
             [Option('r', "region", Required = false, HelpText = "Instead of a profile, use the specified AWS region", Default = "us-east-1")]
             public string Region { get; set; }
+
+            [Option('o', "output", Required = false, HelpText = "Instead of dumping to stdout, save to the specified file")]
+            public string OutputFile { get; set; }
         }
 
         private static string[] titleBanner = new string[] {
@@ -60,6 +66,8 @@ namespace guardduty_stix
             @"  --key=ACCESS_KEY_ID         Instead of a profile, use the specified AWS access key",
             @"  --secret=ACCESS_KEY_SECRET  Instead of a profile, use the specified AWS access secret",
             @"  --region=AWS-REGION-1       Specify the region for the connection.  Required if profile not specified",
+            @"",
+            @"  --output=FILE_PATH          If specified, will save output to specified file; otherwise, to stdout",
             @"",
         };
 
@@ -133,12 +141,19 @@ namespace guardduty_stix
 
             var cts = new CancellationTokenSource();
 
-            var getFindingsTask = Task.Run(async () =>
+            var getFindingsTask = Task.Run(new Func<Task<Tuple<object, Exception>>>(async () =>
             {
                 var client = new AmazonGuardDutyClient(awsCredentials, awsRegion);
 
                 var detectorRequest = new ListDetectorsRequest();
                 var detectorResponse = await client.ListDetectorsAsync(detectorRequest, cts.Token);
+
+                dynamic bundle = new ExpandoObject();
+                bundle.type = "bundle";
+                bundle.id = $"guardduty-stix-{DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)}";
+                bundle.spec_version = "2.0";
+
+                var objects = new List<object>();
 
                 foreach (var detectorId in detectorResponse.DetectorIds)
                 {
@@ -164,39 +179,69 @@ namespace guardduty_stix
                         };
                         var getFindingsResponse = await client.GetFindingsAsync(getFindingsRequest, cts.Token);
 
-                        dynamic bundle = new ExpandoObject();
-                        bundle.type = "bundle";
-                        bundle.id = $"{detectorId}-{DateTime.UtcNow.ToString("o")}";
-                        bundle.spec_version = "2.0";
-
-                        var objects = new List<object>();
                         foreach (var finding in getFindingsResponse.Findings)
                         {
                             var sdo = await ConvertFindingToStixAsync(finding);
                             objects.Add(sdo);
                         }
-
-                        bundle.objects = objects;
-
-
-                        await Console.Out.WriteLineAsync(Newtonsoft.Json.JsonConvert.SerializeObject(bundle));
                     }
                     catch (Exception e)
                     {
                         await Console.Error.WriteLineAsync(e.ToString());
+                        return new Tuple<object, Exception>(null, e);
                     }
                 }
-            });
-            Task.WaitAll(new[] { getFindingsTask }, 60000, cts.Token);
+
+                bundle.objects = objects;
+                return new Tuple<object, Exception>(bundle, null);
+            }));
+
+            if (!Task.WaitAll(new[] { getFindingsTask }, 60000, cts.Token))
+            {
+                Console.Error.WriteLine("Failed to complete within 60 seconds, aborted.");
+                System.Environment.Exit(-7);
+                return -7;
+            }
+
+            var result = getFindingsTask.Result;
+
+            if (result.Item2 != null)
+            {
+                Console.Error.WriteLine($"Unable to parse output: {result.Item2.ToString()}");
+                System.Environment.Exit(-8);
+                return -8;
+            }
+
+            if (string.IsNullOrWhiteSpace(options.OutputFile))
+                Console.Out.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(result.Item1));
+            else
+            {
+                try
+                {
+                    using (var fs = new FileStream(options.OutputFile, FileMode.Create, FileAccess.Write))
+                    using (var sw = new StreamWriter(fs))
+                    {
+                        sw.Write(Newtonsoft.Json.JsonConvert.SerializeObject(result.Item1));
+                    }
+
+                    Console.Out.WriteLine($"Output saved to file {options.OutputFile}");
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine($"Unable to write file: {e.ToString()}");
+                    System.Environment.Exit(-9);
+                    return -9;
+                }
+            }
+
             return 0;
         }
 
         private static async Task<object> ConvertFindingToStixAsync(Finding finding)
         {
             // UUID should be deterministically determined from finding.Id
-            byte[] bytes = Encoding.UTF8.GetBytes(finding.Id);
-            var hashstring = new SHA256Managed();
-            var hash = hashstring.ComputeHash(bytes);
+            var bytes = Encoding.UTF8.GetBytes(finding.Id);
+            var hash = sha256managed.ComputeHash(bytes);
             var uuid = new Guid(hash.Take(16).ToArray());
 
             var labels = new object[0];
@@ -204,11 +249,19 @@ namespace guardduty_stix
             dynamic ret = new ExpandoObject();
             ret.id = $"indicator--{uuid}";
             ret.type = "indicator";
-            ret.name = finding.Title;
-            ret.description = finding.Description;
-            ret.valid_from = DateTime.Parse(finding.CreatedAt).ToString("o");
-            ret.created = DateTime.Parse(finding.CreatedAt).ToString("o");
-            ret.modified = DateTime.Parse(finding.UpdatedAt).ToString("o");
+            if (finding.Title != null)
+                ret.name = finding.Title;
+            if (finding.Description != null)
+                ret.description = finding.Description;
+            if (finding.CreatedAt != null && DateTime.TryParse(finding.CreatedAt, out DateTime dateCreatedAt))
+            {
+                ret.valid_from = dateCreatedAt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
+                ret.created = ret.valid_from;
+            }
+
+            if (finding.UpdatedAt != null && DateTime.TryParse(finding.UpdatedAt, out DateTime dateUpdatedAt))
+                ret.modified = dateUpdatedAt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
+
             ret.external_references = new[]
             {
                     new {
@@ -267,7 +320,8 @@ namespace guardduty_stix
                             subPattern.Append(" OR ");
                         subPattern.Append($"({(subPattern.Length > 2 ? " AND " : string.Empty)}(network-traffic:dst_ref.type = 'ipv4-addr' AND network-traffic:dst_ref.value = '{nic.PublicIp ?? nic.PrivateIpAddress}/32'))");
                     }
-                    if (nicCount < 2) {
+                    if (nicCount < 2)
+                    {
                         subPattern.Remove(0, 2);
                         subPattern.Remove(subPattern.Length - 2, 1);
                     }
@@ -275,7 +329,8 @@ namespace guardduty_stix
                         subPattern.Append(')');
                     sbPattern.Append(subPattern);
                 }
-                else if (finding.Title.StartsWith("Outbound portscan from EC2 instance")) {
+                else if (finding.Title.StartsWith("Outbound portscan from EC2 instance"))
+                {
                     var subPattern = new StringBuilder();
                     subPattern.Append('(');
                     var nicCount = 0;
@@ -286,7 +341,8 @@ namespace guardduty_stix
                             subPattern.Append(" OR ");
                         subPattern.Append($"({(subPattern.Length > 2 ? " AND " : string.Empty)}(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{nic.PublicIp ?? nic.PrivateIpAddress}/32'))");
                     }
-                    if (nicCount < 2) {
+                    if (nicCount < 2)
+                    {
                         subPattern.Remove(0, 2);
                         subPattern.Remove(subPattern.Length - 2, 1);
                     }
@@ -325,7 +381,7 @@ namespace guardduty_stix
                     sbPattern.Append($"{(sbPattern.Length > 1 ? " AND " : string.Empty)}({asn}network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{probDetail.RemoteIpDetails.IpAddressV4}/32')");
                 }
             }
-            
+
             if (sbPattern.Length > 1)
                 ret.pattern = sbPattern.Append("]").ToString();
 
