@@ -1,4 +1,4 @@
-# guardduty-stix
+# guardduty-stix [![Build Status](https://travis-ci.org/seanmcelroy/guardduty-stix.svg?branch=master)](https://travis-ci.org/seanmcelroy/guardduty-stix)
 A program to turn GuardDuty findings from the AWS API into compliant STIX 2.0
 
 This is a C# .NET Core program that will connect to your AWS GuardDuty instance
