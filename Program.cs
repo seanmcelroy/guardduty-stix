@@ -31,9 +31,6 @@ namespace guardduty_stix
 
             [Option('r', "region", Required = false, HelpText = "Instead of a profile, use the specified AWS region", Default = "us-east-1")]
             public string Region { get; set; }
-
-            [Option('v', "verbose", Required = false, HelpText = "Set output to verbose messages.")]
-            public bool Verbose { get; set; }
         }
 
         private static string[] titleBanner = new string[] {
@@ -62,6 +59,7 @@ namespace guardduty_stix
             @"  --profile=PROFILE_NAME      Connect to the AWS account with the credential stored in a named profile",
             @"  --key=ACCESS_KEY_ID         Instead of a profile, use the specified AWS access key",
             @"  --secret=ACCESS_KEY_SECRET  Instead of a profile, use the specified AWS access secret",
+            @"  --region=AWS-REGION-1       Specify the region for the connection.  Required if profile not specified",
             @"",
         };
 
@@ -189,9 +187,7 @@ namespace guardduty_stix
                     }
                 }
             });
-            Task.WaitAll(getFindingsTask);
-
-            Console.WriteLine("Hello World!");
+            Task.WaitAll(new[] { getFindingsTask }, 60000, cts.Token);
             return 0;
         }
 
@@ -252,39 +248,86 @@ namespace guardduty_stix
                 };
             }
 
+            var sbPattern = new StringBuilder("[");
+
+            if (finding.Resource.AccessKeyDetails != null)
+                sbPattern.Append($"(user-account:account_type = 'aws' AND user-account:user_id = '{finding.Resource.AccessKeyDetails.AccessKeyId ?? finding.Resource.AccessKeyDetails.UserName}' AND user-account:account_login = '{finding.Resource.AccessKeyDetails.UserName.Replace("\'", "")}')");
+
+            if (finding.Resource.InstanceDetails != null)
+            {
+                if (finding.Service.Action.PortProbeAction != null)
+                {
+                    var subPattern = new StringBuilder();
+                    subPattern.Append('(');
+                    var nicCount = 0;
+                    foreach (var nic in finding.Resource.InstanceDetails.NetworkInterfaces)
+                    {
+                        nicCount++;
+                        if (nicCount > 1)
+                            subPattern.Append(" OR ");
+                        subPattern.Append($"({(subPattern.Length > 2 ? " AND " : string.Empty)}(network-traffic:dst_ref.type = 'ipv4-addr' AND network-traffic:dst_ref.value = '{nic.PublicIp ?? nic.PrivateIpAddress}/32'))");
+                    }
+                    if (nicCount < 2) {
+                        subPattern.Remove(0, 2);
+                        subPattern.Remove(subPattern.Length - 2, 1);
+                    }
+                    else
+                        subPattern.Append(')');
+                    sbPattern.Append(subPattern);
+                }
+                else if (finding.Title.StartsWith("Outbound portscan from EC2 instance")) {
+                    var subPattern = new StringBuilder();
+                    subPattern.Append('(');
+                    var nicCount = 0;
+                    foreach (var nic in finding.Resource.InstanceDetails.NetworkInterfaces)
+                    {
+                        nicCount++;
+                        if (nicCount > 1)
+                            subPattern.Append(" OR ");
+                        subPattern.Append($"({(subPattern.Length > 2 ? " AND " : string.Empty)}(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{nic.PublicIp ?? nic.PrivateIpAddress}/32'))");
+                    }
+                    if (nicCount < 2) {
+                        subPattern.Remove(0, 2);
+                        subPattern.Remove(subPattern.Length - 2, 1);
+                    }
+                    else
+                        subPattern.Append(')');
+                    sbPattern.Append(subPattern);
+                }
+                else
+                    await Console.Error.WriteLineAsync("No known pattern for instance details.");
+            }
+
             if (finding.Service.Action.AwsApiCallAction != null)
             {
                 var remote = finding.Service.Action.AwsApiCallAction.RemoteIpDetails;
                 if (remote != null)
-                    ret.pattern = $"[(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{JsonConvert.ToString(remote.IpAddressV4)}/32')]";
+                    sbPattern.Append($"{(sbPattern.Length > 1 ? " AND " : string.Empty)}(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{remote.IpAddressV4}/32')");
                 else
                     await Console.Error.WriteLineAsync("No known pattern for AWS API call action.");
             }
-            else if (finding.Service.Action.NetworkConnectionAction != null)
+
+            if (finding.Service.Action.NetworkConnectionAction != null)
             {
                 var nca = finding.Service.Action.NetworkConnectionAction;
                 if (nca.RemoteIpDetails != null)
-                    ret.pattern = $"[(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{JsonConvert.ToString(nca.RemoteIpDetails.IpAddressV4)}/32')]";
+                    sbPattern.Append($"{(sbPattern.Length > 1 ? " AND " : string.Empty)}(network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{nca.RemoteIpDetails.IpAddressV4}/32')");
                 else
                     await Console.Error.WriteLineAsync("No known pattern for network connection action.");
             }
-            else if (finding.Service.Action.PortProbeAction != null)
+
+            if (finding.Service.Action.PortProbeAction != null)
             {
-                var sb = new StringBuilder("[");
                 foreach (var probDetail in finding.Service.Action.PortProbeAction.PortProbeDetails)
                 {
-                    if (sb.Length > 1)
-                        sb.Append(" OR ");
-
                     var org = probDetail.RemoteIpDetails.Organization;
-                    var asn = org == null ? "" : $"autonomous-system:number = {JsonConvert.ToString(org.Asn)} AND autonomous-system:name = '{JsonConvert.ToString(org.AsnOrg)}' AND ";
-                    sb.Append($"({asn}network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{JsonConvert.ToString(probDetail.RemoteIpDetails.IpAddressV4)}/32')");
+                    var asn = org == null ? "" : $"autonomous-system:number = {org.Asn} AND autonomous-system:name = '{org.AsnOrg.Replace("\'", "")}' AND ";
+                    sbPattern.Append($"{(sbPattern.Length > 1 ? " AND " : string.Empty)}({asn}network-traffic:src_ref.type = 'ipv4-addr' AND network-traffic:src_ref.value = '{probDetail.RemoteIpDetails.IpAddressV4}/32')");
                 }
-                sb.Append("]");
-                ret.pattern = sb.ToString();
             }
-            else
-                await Console.Error.WriteLineAsync("No known pattern for unhandled action.");
+            
+            if (sbPattern.Length > 1)
+                ret.pattern = sbPattern.Append("]").ToString();
 
             return ret;
         }
