@@ -44,11 +44,11 @@ namespace guardduty_stix
             @"     ___/ // / _/ / /   |    / __/_/ /_/ /           ",
             @"    /____//_/ /___//_/|_|   /____(_)____/            ",
             @"",
-            @" A program to turn GuardDuty findings from the AWS API",
-            @" into compliant STIX 2.0",
+            @"A program to turn GuardDuty findings from the AWS API",
+            @"   into compliant STIX 2.0                           ",
             @"",
-            @" Copyright Sean McElroy 2018.  All rights reserved.  ",
-            @" Released under the terms of the MIT License.        ",
+            @"Copyright Sean McElroy 2018  <me@seanmcelroy.com>    ",
+            @"   Released under the terms of the MIT License.      ",
             @""
         };
 
